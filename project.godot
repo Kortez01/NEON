@@ -1,0 +1,30 @@
+; NEON REVENANT — native desktop prototype for Windows 11
+; Built with Godot Engine 4.6 (Forward+ renderer). No HTML or browser runtime.
+
+config_version=5
+
+[application]
+
+config/name="NEON REVENANT"
+config/description="Third-person neon combat prototype"
+run/main_scene="res://main.tscn"
+config/version="0.2.0"
+
+[display]
+
+window/size/viewport_width=1600
+window/size/viewport_height=900
+window/size/window_width_override=1600
+window/size/window_height_override=900
+window/stretch/mode="disabled"
+
+[rendering]
+
+renderer/rendering_method="forward_plus"
+renderer/rendering_method.mobile="mobile"
+textures/default_filters/use_nearest_mipmap_filter=false
+environment/defaults/default_clear_color=Color(0.008, 0.008, 0.025, 1)
+
+[physics]
+3d/default_gravity=24.0
+
