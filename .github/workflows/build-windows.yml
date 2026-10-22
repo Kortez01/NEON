@@ -27,9 +27,22 @@ jobs:
       - name: Verify Godot
         shell: pwsh
         run: |
-          godot --version
-          if ($LASTEXITCODE -ne 0) {
-            throw "Godot не запустился"
+          Write-Host "Checking Godot installation..."
+          Write-Host "GODOT=$env:GODOT"
+          Write-Host "GODOT4=$env:GODOT4"
+
+          Get-Command godot -ErrorAction SilentlyContinue |
+            Format-List Name,Source,CommandType
+
+          godot --headless --version 2>&1
+          $code = $LASTEXITCODE
+
+          if ($code -ne 0) {
+            Write-Host "Godot returned exit code: $code"
+            Write-Host "Files in bin directory:"
+            Get-ChildItem "$env:GITHUB_WORKSPACE\bin" `
+              -Force -ErrorAction SilentlyContinue
+            throw "Godot startup failed. See diagnostic output above."
           }
 
       - name: Validate project
