@@ -31,7 +31,7 @@ jobs:
           # Download Windows version of Godot
           $engineZip = Join-Path $tools "engine.zip"
           $engineDir = Join-Path $tools "engine"
-          $godotPath = Join-Path $tools "godot.exe"
+          $godotPath = Join-Path $tools "godot_console.exe"
 
           Invoke-WebRequest `
             -Uri "$base/Godot_v4.6-stable_win64.exe.zip" `
