@@ -41,8 +41,9 @@ jobs:
             -DestinationPath $engineDir -Force
 
           $found = Get-ChildItem -Path $engineDir `
-            -Filter "Godot_v4.6-stable_win64.exe" `
-            -File -Recurse | Select-Object -First 1
+            -Filter "Godot_v4.6-stable_win64_console.exe" `
+            -Filter-Recurse | Select-Object -First 1
+           
 
           if (!$found) {
             throw "Godot executable was not found in downloaded archive"
