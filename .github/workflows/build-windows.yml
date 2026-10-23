@@ -33,17 +33,17 @@ jobs:
           $command = Get-Command godot -ErrorAction Stop
           $godotPath = $command.Source
 
+          if ([string]::IsNullOrWhiteSpace($godotPath)) {
+            $godotPath = $command.Path
+          }
+
           Write-Host "Godot executable: $godotPath"
+          Add-Content -Path $env:GITHUB_ENV -Value "GODOT_EXE=$godotPath"
 
-          Add-Content -Path $env:GITHUB_ENV `
-            -Value "GODOT_EXE=$godotPath"
+          & $godotPath --headless --version
 
-          godot --headless --version
-
-          $code = $LASTEXITCODE
-
-          if (($null -ne $code) -and ($code -ne 0)) {
-            throw "Godot returned exit code $code"
+          if ($LASTEXITCODE -ne 0) {
+            throw "Godot failed to start"
           }
 
       - name: Check project files
@@ -62,11 +62,12 @@ jobs:
             }
           }
 
-          Write-Host "Project files found."
+          Write-Host "Required project files found."
 
       - name: Validate project
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
           $project = $env:GITHUB_WORKSPACE
 
           & "$env:GODOT_EXE" `
@@ -77,17 +78,19 @@ jobs:
 
           $code = $LASTEXITCODE
 
-          if (($null -ne $code) -and ($code -ne 0)) {
-            throw "Godot project validation failed: $code"
+          if ($code -ne 0) {
+            throw "Project validation failed with exit code $code"
           }
 
-      - name: Export Windows EXE
+      - name: Configure Windows export preset
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          $project = $env:GITHUB_WORKSPACE
-          $config = Get-Content "export_presets.cfg" -Raw
+          $presetFile = Join-Path `
+            $env:GITHUB_WORKSPACE "export_presets.cfg"
+
+          $config = Get-Content -LiteralPath $presetFile -Raw
 
           $blocks = [regex]::Matches(
             $config,
@@ -95,53 +98,139 @@ jobs:
           )
 
           $presetName = $null
+          $updatedConfig = $config
 
           foreach ($item in $blocks) {
             $block = $item.Value
 
             if ($block -match '(?m)^platform="Windows Desktop"\s*$') {
-              $match = [regex]::Match(
+              $nameMatch = [regex]::Match(
                 $block,
                 '(?m)^name="([^"]+)"\s*$'
               )
 
-              if ($match.Success) {
-                $presetName = $match.Groups[1].Value
-                break
+              if (!$nameMatch.Success) {
+                throw "Windows export preset has no name"
               }
+
+              $presetName = $nameMatch.Groups[1].Value
+
+              # Ensure that Godot exports a runnable application.
+              if ($block -match '(?m)^runnable\s*=') {
+                $updatedBlock = [regex]::Replace(
+                  $block,
+                  '(?m)^runnable\s*=\s*(true|false)\s*$',
+                  'runnable=true'
+                )
+              } else {
+                $updatedBlock = [regex]::Replace(
+                  $block,
+                  '(?m)^(platform="Windows Desktop")\s*$',
+                  '$1' + "`r`n" + 'runnable=true'
+                )
+              }
+
+              # Set the output path inside the project directory.
+              if ($updatedBlock -match '(?m)^export_path=') {
+                $updatedBlock = [regex]::Replace(
+                  $updatedBlock,
+                  '(?m)^export_path=.*$',
+                  'export_path="build/NEON_REVENANT.exe"'
+                )
+              } else {
+                $updatedBlock = $updatedBlock.TrimEnd() +
+                  "`r`n" +
+                  'export_path="build/NEON_REVENANT.exe"' +
+                  "`r`n"
+              }
+
+              $updatedConfig =
+                $config.Substring(0, $item.Index) +
+                $updatedBlock +
+                $config.Substring($item.Index + $item.Length)
+
+              break
             }
           }
 
           if (!$presetName) {
-            throw "Windows Desktop preset not found in export_presets.cfg"
+            throw "No Windows Desktop preset found in export_presets.cfg"
           }
 
-          Write-Host "Export preset: $presetName"
+          [System.IO.File]::WriteAllText(
+            $presetFile,
+            $updatedConfig,
+            [System.Text.UTF8Encoding]::new($false)
+          )
 
+          Write-Host "Windows preset: $presetName"
+          Write-Host "Runnable application enabled."
+          Write-Host "Output: build/NEON_REVENANT.exe"
+
+          Add-Content -Path $env:GITHUB_ENV `
+            -Value "WINDOWS_PRESET=$presetName"
+
+      - name: Export Windows EXE
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $false
+
+          $project = $env:GITHUB_WORKSPACE
           $buildDir = Join-Path $project "build"
 
           New-Item -ItemType Directory `
             -Path $buildDir -Force | Out-Null
 
           $exePath = Join-Path $buildDir "NEON_REVENANT.exe"
+          $logPath = Join-Path $buildDir "export.log"
+
+          if (Test-Path $exePath) {
+            Remove-Item $exePath -Force
+          }
+
+          if (Test-Path $logPath) {
+            Remove-Item $logPath -Force
+          }
+
+          Write-Host "Starting Windows export..."
+          Write-Host "Preset: $env:WINDOWS_PRESET"
+          Write-Host "Output: $exePath"
 
           & "$env:GODOT_EXE" `
             --headless `
+            --verbose `
             --path "$project" `
-            --export-release "$presetName" "$exePath"
+            --export-release "$env:WINDOWS_PRESET" "$exePath" `
+            2>&1 | Tee-Object -FilePath $logPath
 
           $code = $LASTEXITCODE
 
-          if (($null -ne $code) -and ($code -ne 0)) {
-            throw "Export failed with exit code $code"
+          if ($code -ne 0) {
+            Write-Host "::group::Export log"
+            if (Test-Path $logPath) {
+              Get-Content -LiteralPath $logPath -Tail 200
+            }
+            Write-Host "::endgroup::"
+
+            throw "Godot export failed with exit code $code"
           }
 
           if (!(Test-Path $exePath)) {
-            throw "EXE was not generated. Check the Godot export log."
+            Write-Host "::group::Export log"
+            if (Test-Path $logPath) {
+              Get-Content -LiteralPath $logPath -Tail 200
+            }
+            Write-Host "::endgroup::"
+
+            throw "EXE was not generated. See export log above."
           }
 
-          Write-Host "EXE created successfully:"
-          Get-ChildItem $buildDir
+          $file = Get-Item $exePath
+
+          Write-Host "SUCCESS: Windows EXE created."
+          Write-Host "File: $($file.FullName)"
+          Write-Host "Size: $($file.Length) bytes"
 
       - name: Upload compiled game
         uses: actions/upload-artifact@v4
