@@ -12,118 +12,73 @@ jobs:
   export:
     name: Export Windows x64
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
 
     steps:
       - name: Checkout project
         uses: actions/checkout@v4
 
-      - name: Download official Godot 4.6.3
+      - name: Install Godot 4.6.3
+        uses: chickensoft-games/setup-godot@v2
+        with:
+          version: 4.6.3
+          use-dotnet: false
+          include-templates: true
+
+      - name: Verify Godot
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          $version = "4.6.3"
-          $tag = "$version-stable"
-          $base = "https://github.com/godotengine/godot/releases/download/$tag"
-          $tools = Join-Path $env:RUNNER_TEMP "godot46"
+          $command = Get-Command godot -ErrorAction Stop
+          $godotPath = $command.Source
 
-          New-Item -ItemType Directory -Path $tools -Force |
-            Out-Null
-
-          # Download Godot console executable
-          $engineZip = Join-Path $tools "engine.zip"
-          $engineDir = Join-Path $tools "engine"
-          $godotPath = Join-Path $tools "godot_console.exe"
-
-          $engineUrl = "$base/Godot_v${version}-stable_win64_console.exe.zip"
-
-          Invoke-WebRequest -Uri $engineUrl -OutFile $engineZip
-
-          Expand-Archive -LiteralPath $engineZip `
-            -DestinationPath $engineDir -Force
-
-          # Find the correct executable
-          $found = Get-ChildItem -Path $engineDir -Recurse -File |
-            Where-Object {
-              $_.Name -eq "Godot_v${version}-stable_win64_console.exe"
-            } |
-            Select-Object -First 1
-
-          if (!$found) {
-            Get-ChildItem -Path $engineDir -Recurse |
-              Select-Object FullName
-            throw "Godot console executable was not found"
-          }
-
-          Copy-Item -LiteralPath $found.FullName `
-            -Destination $godotPath -Force
-
-          # Verify that Godot starts
-          & $godotPath --headless --version
-          $engineExit = $LASTEXITCODE
-
-          if ($engineExit -ne 0) {
-            throw "Godot failed to start. Exit code: $engineExit"
-          }
+          Write-Host "Godot executable: $godotPath"
 
           Add-Content -Path $env:GITHUB_ENV `
             -Value "GODOT_EXE=$godotPath"
 
-          # Download export templates
-          $templatesZip = Join-Path $tools "templates.zip"
-          $templatesDir = Join-Path $tools "templates-unpacked"
+          godot --headless --version
 
-          $templatesUrl = "$base/Godot_v${version}-stable_export_templates.tpz"
+          $code = $LASTEXITCODE
 
-          Invoke-WebRequest -Uri $templatesUrl `
-            -OutFile $templatesZip
-
-          Expand-Archive -LiteralPath $templatesZip `
-            -DestinationPath $templatesDir -Force
-
-          $templateSource = Join-Path $templatesDir "templates"
-
-          if (!(Test-Path $templateSource)) {
-            $templateSource = $templatesDir
+          if (($null -ne $code) -and ($code -ne 0)) {
+            throw "Godot returned exit code $code"
           }
 
-          $templateTarget = Join-Path $env:APPDATA `
-            "Godot\export_templates\${version}.stable"
-
-          New-Item -ItemType Directory `
-            -Path $templateTarget -Force | Out-Null
-
-          Copy-Item -Path "$templateSource\*" `
-            -Destination $templateTarget -Recurse -Force
-
-          $requiredTemplate = Join-Path $templateTarget `
-            "windows_release_x86_64.exe"
-
-          if (!(Test-Path $requiredTemplate)) {
-            Get-ChildItem -Path $templateTarget -Recurse |
-              Select-Object FullName
-            throw "Windows release export template is missing"
-          }
-
-      - name: Validate project
+      - name: Check project files
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
 
-          if (!(Test-Path "project.godot")) {
-            throw "project.godot is missing from repository root"
+          $requiredFiles = @(
+            "project.godot",
+            "export_presets.cfg"
+          )
+
+          foreach ($file in $requiredFiles) {
+            if (!(Test-Path $file)) {
+              throw "Missing required file: $file"
+            }
           }
 
-          if (!(Test-Path "export_presets.cfg")) {
-            throw "export_presets.cfg is missing from repository root"
-          }
+          Write-Host "Project files found."
 
-          & "$env:GODOT_EXE" --headless --editor `
-            --path "$env:GITHUB_WORKSPACE" --quit
+      - name: Validate project
+        shell: pwsh
+        run: |
+          $project = $env:GITHUB_WORKSPACE
 
-          if ($LASTEXITCODE -ne 0) {
-            throw "Godot could not load the project"
+          & "$env:GODOT_EXE" `
+            --headless `
+            --editor `
+            --path "$project" `
+            --quit
+
+          $code = $LASTEXITCODE
+
+          if (($null -ne $code) -and ($code -ne 0)) {
+            throw "Godot project validation failed: $code"
           }
 
       - name: Export Windows EXE
@@ -132,11 +87,10 @@ jobs:
           $ErrorActionPreference = "Stop"
 
           $project = $env:GITHUB_WORKSPACE
-          $presetFile = Join-Path $project "export_presets.cfg"
-          $content = Get-Content -Path $presetFile -Raw
+          $config = Get-Content "export_presets.cfg" -Raw
 
           $blocks = [regex]::Matches(
-            $content,
+            $config,
             '(?ms)^\[preset\.\d+\]\r?\n.*?(?=^\[|\z)'
           )
 
@@ -162,28 +116,32 @@ jobs:
             throw "Windows Desktop preset not found in export_presets.cfg"
           }
 
-          Write-Host "Using export preset: $presetName"
+          Write-Host "Export preset: $presetName"
 
           $buildDir = Join-Path $project "build"
 
           New-Item -ItemType Directory `
             -Path $buildDir -Force | Out-Null
 
-          $exe = Join-Path $buildDir "NEON_REVENANT.exe"
+          $exePath = Join-Path $buildDir "NEON_REVENANT.exe"
 
-          & "$env:GODOT_EXE" --headless `
+          & "$env:GODOT_EXE" `
+            --headless `
             --path "$project" `
-            --export-release "$presetName" "$exe"
+            --export-release "$presetName" "$exePath"
 
-          if ($LASTEXITCODE -ne 0) {
-            throw "Windows EXE export failed"
+          $code = $LASTEXITCODE
+
+          if (($null -ne $code) -and ($code -ne 0)) {
+            throw "Export failed with exit code $code"
           }
 
-          if (!(Test-Path $exe)) {
-            throw "NEON_REVENANT.exe was not generated"
+          if (!(Test-Path $exePath)) {
+            throw "EXE was not generated. Check the Godot export log."
           }
 
-          Get-ChildItem -Path $buildDir
+          Write-Host "EXE created successfully:"
+          Get-ChildItem $buildDir
 
       - name: Upload compiled game
         uses: actions/upload-artifact@v4
